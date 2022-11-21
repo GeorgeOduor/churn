@@ -1,0 +1,246 @@
+---
+title: "Train and evaluate models with tidymodels"
+date: "`r Sys.Date()`"
+output:
+  officedown::rdocx_document:
+    reference_docx: C:/Users/George Oduor/Documents/template.docx   
+    tables:
+      style: Table
+      layout: autofit
+      width: 1.0
+      caption:
+        style: Table Caption
+        pre: 'Table '
+        sep: ': '
+      conditional:
+        first_row: true
+        first_column: false
+        last_row: false
+        last_column: false
+        no_hband: false
+        no_vband: true
+    plots:
+      style: Normal
+      align: center
+      caption:
+        style: Image Caption
+        pre: 'Figure '
+        sep: ': '
+  word_document:
+    toc: yes
+  html_document:
+    toc: yes
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+    theme: united
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width = 8, fig.height = 5)
+```
+
+# Introduction
+
+The goal of this analysis is to **predict with precision the probability of customer churn** and consequently *help in customer retention and mitigation of the risks related to customer churn.*
+
+## Business Value
+
+Below are some the business values that this analysis will create:
+
+1\. Reduce churn rate by detecting early clients who are about to churn.
+
+2\. Increase customer retention.
+
+3\. Understand customer base better based on their activity.
+
+## Data-set
+
+The data set used in this project was sourced from client transaction data recorded since the inception of the banking institution.Based in this data set,informative feature sets were created which were subsequently used in the predictive model.
+
+### Inclusion Criteria
+
+The clients records included in this study were selected from those who were determined to have done at least one transaction within the banking platform.
+
+### Exclusion Criteria
+
+Clients who on boarded the digital platform of the bank and did not make any transaction.
+
+## Project setup and data loading
+
+```{r introduction cell,warning=F,message=F,error=F}
+library(tidymodels);library(feather);library(tidyverse);library(janitor);library(flextable);library(SmartEDA);library(corrplot)
+dataset <-read.csv("E:/New folder/denis/old/data/rawdata/churn.csv") %>% 
+  # mutate_at(c("Min_LoanTaken","Max_LoanTaken","FirstTrxDate","ProductID"),as.numeric) %>% 
+  select(-c(X)) 
+
+```
+
+# Exploratory Data Analysis
+
+## Data Overview
+
+```{r}
+ExpData(dataset) %>% 
+  flextable() %>% 
+  autofit() 
+```
+
+**Observations and inferences.**
+
+-   The data set contains `r format(nrow(dataset),big.mark=",")` records of customer transactions with `r length(names(dataset))` features.
+
+-   98.51% of the cases have complete records meaning the remaining 1.49 % have missing values.This is normal with most real life data sets that contain missing values.
+
+## Uni-variate Data Analysis.
+
+### Target Variable
+
+```{r target var}
+
+dataset %>% 
+  group_by(Churn) %>% 
+  tally(name = "Count") %>% 
+  mutate(Percent = paste(round(Count/sum(Count),2)*100,"%")) %>% 
+  adorn_totals('row') %>% 
+  flextable() %>% 
+  autofit() 
+```
+
+**Observations and Inferences**
+
+-   The institution has suffered a 22% churn rate overtime.
+
+### Explanatory Variables
+
+#### Categorical Variables
+
+```{r}
+dataset %>% select(-Churn) %>% ExpCatViz(theme = theme_classic())
+```
+
+
+```{r}
+ExpCTable(dataset %>% select(-Churn) %>% 
+            mutate(HasFixedDeposit = ifelse(HasFixedDeposit ==1,"Yes","No"))) %>% 
+  #pull(Variable) %>% unique() %>% paste(collapse = ",")
+  flextable() %>% autofit() %>% merge_v(j=1,target = "Variable")
+```
+
+__Observation & inferences__
+
+- _Number of products_ : At least half (54%) subscribed to at least two of the financial institution's digital products while a very small percentage subscribed to more than 2 products.
+
+- _HasFixedDeposit_ : Minority of the clients,1.72%, have subscribred to fixed deposit product of the institution.
+
+
+
+\newpage
+
+<!---BLOCK_LANDSCAPE_START--->
+#### Numeric Variables
+
+```{r}
+num_vars <- dataset %>% select(-c(Churn))
+num_vars %>% 
+  # select(Tenure,No_of_transactions) %>% 
+  ExpNumStat() %>% select(-c(Group,NegInf,PosInf,Per_of_Missing,CV,nNeg,nZero,NA_Value,nPos)) %>% #view()
+  flextable(theme_fun = set_flextable_defaults(font.size = 12,padding = 0)) %>% autofit()
+
+```
+
+```{r}
+# dataset %>% select(is.numeric)
+```
+
+__Observations and inferences__
+
+. 
+<!---BLOCK_LANDSCAPE_STOP--->
+
+## Bivariate Distribution
+
+### Categorical Variables Vs Target Variables
+
+```{r}
+dataset %>% 
+  mutate(HasFixedDeposit= ifelse(HasFixedDeposit == 1,"Yes","No")) %>% 
+  select(HasFixedDeposit,ProductsSub,Churn) %>% 
+  reshape2::melt('Churn') %>% 
+  group_by(Churn,variable,value) %>% 
+  tally() %>% 
+  reshape2::dcast(variable+value~Churn,value.var = "n") %>% 
+  group_by(variable) %>%
+  split(.$variable) %>% 
+  map_df(~adorn_totals(.,c("row","col")) %>% 
+           mutate_all(.funs = function(x)ifelse(is.na(x),0,x)) %>% 
+           mutate(ChurnRate = paste(round(Yes/Total,2)*100,"%")) ) %>% 
+  mutate_all(format,big.mark=",") %>% 
+  flextable(defaults = set_flextable_defaults(font.size = 8)) %>% 
+  autofit() %>% 
+  merge_v(j = 1,target = 'variable') %>% 
+  align_text_col(align = "right")
+  
+  
+```
+
+__Observations and inferences__
+
+- All clients (100%) subscribed to only one product appeared to have churned as compared to clients subscribed to at least 2 or more products.
+- It is less likely for clients who are presently servicing theor loans to churn as compared to other clients.This might be caused by the fact that the institution's primary product is loans oriented.
+
+
+
+<!---BLOCK_LANDSCAPE_START--->
+### Numerical Variables vs target variable
+
+```{r}
+options(scipen = 999)
+num_vars <- dataset %>% select(names(num_vars),Churn)
+ExpNumStat(num_vars,by = "G",gp = 'Churn') %>% 
+  select(-c(NegInf,PosInf,Per_of_Missing,CV,nNeg,nZero,NA_Value,nPos)) %>% 
+  flextable() %>% autofit()
+```
+
+
+<!---BLOCK_LANDSCAPE_STOP--->
+
+### Identical feature removal 
+
+### Explanatory Variable Correlations
+
+```{r}
+corr_stats <- dataset %>%
+  select_if(is.numeric) %>%#
+  select(contains('Loan')) %>% 
+  cor()
+
+corrplot(corr_stats, type = "lower",
+         tl.col = "black", tl.srt = 45)  
+
+```
+
+## Base Model
+
+```{r}
+tidymodels_prefer()
+set.seed(1)
+churn_sc_data <- initial_split(dataset,prop = .8,strata = "Churn")
+
+train <- training(churn_sc_data)
+test <- testing(churn_sc_data)
+
+library(caret)
+
+```
+
+## Feature engineering
+
+```{r}
+lm <- logistic_reg() %>% 
+  fit(Churn~.,data=dataset %>% mutate(Churn=as.factor(Churn)))
+
+```
+
