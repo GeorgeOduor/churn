@@ -72,7 +72,7 @@ Clients who on boarded the digital platform of the bank and did not make any tra
 
 ```{r introduction cell,warning=F,message=F,error=F}
 library(tidymodels);library(feather);library(tidyverse);library(janitor);library(flextable);library(SmartEDA);library(corrplot)
-dataset <-read.csv("E:/New folder/denis/old/data/rawdata/churn.csv") %>% 
+dataset <-read.csv("~/churn/old/data/rawdata/churn.csv") %>% 
   # mutate_at(c("Min_LoanTaken","Max_LoanTaken","FirstTrxDate","ProductID"),as.numeric) %>% 
   select(-c(X)) 
 
@@ -198,7 +198,7 @@ __Observations and inferences__
 
 ```{r}
 options(scipen = 999)
-num_vars <- dataset %>% select(names(num_vars),Churn)
+num_vars <- dataset %>% select(names(num_vars),Churn) %>% select(-c(client_id))
 ExpNumStat(num_vars,by = "G",gp = 'Churn') %>% 
   select(-c(NegInf,PosInf,Per_of_Missing,CV,nNeg,nZero,NA_Value,nPos)) %>% 
   flextable() %>% autofit()
@@ -212,28 +212,49 @@ ExpNumStat(num_vars,by = "G",gp = 'Churn') %>%
 ### Explanatory Variable Correlations
 
 ```{r}
-corr_stats <- dataset %>%
-  select_if(is.numeric) %>%#
-  select(contains('Loan')) %>% 
-  cor()
+corr_stats <- num_vars %>%
+  select_if(is.numeric) %>% # 
+  select(-c(contains('deposit_vs_withdrawal'),age,DaysSinceTransaction,minWithdrawal,HasFixedDeposit)) %>% 
+  cor(use = "complete.obs") #%>% as_tibble()
 
-corrplot(corr_stats, type = "lower",
-         tl.col = "black", tl.srt = 45)  
+corrplot(corr_stats, type = "lower",tl.col = "black", tl.srt = 45)  
 
 ```
+
+## Pre variable_selection selection
+
+```{r}
+dataset1 = dataset %>% select(-c(minWithdrawal,age,HasFixedDeposit)) 
+```
+
 
 ## Base Model
 
 ```{r}
 tidymodels_prefer()
 set.seed(1)
-churn_sc_data <- initial_split(dataset,prop = .8,strata = "Churn")
+churn_sc_data <- initial_split(dataset1,prop = .8,strata = "Churn")
 
 train <- training(churn_sc_data)
 test <- testing(churn_sc_data)
 
-library(caret)
+set.seed(1)
+bird_folds <- vfold_cv(train, strata = Churn)
 
+glm_spec <- logistic_reg()
+
+base_mod <- recipe(Churn~.,data = train) %>% 
+  update_role(client_id,new_role = "sample ID") %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_center(na_rm = T)
+  
+  
+wf_basic <- workflow(base_mod,glm_spec) 
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_basic   <- fit_resamples(wf_basic, bird_folds, control = ctrl_preds)
+
+collect_metrics(rs_basic)
 ```
 
 ## Feature engineering
