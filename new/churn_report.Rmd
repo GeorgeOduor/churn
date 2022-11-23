@@ -224,44 +224,34 @@ corrplot(corr_stats, type = "lower",tl.col = "black", tl.srt = 45)
 ## Pre variable_selection selection
 
 ```{r}
-dataset1 = dataset %>% select(-c(minWithdrawal,age,HasFixedDeposit)) 
-```
+dataset1 = dataset %>% select(-c(client_id,minWithdrawal,age,HasFixedDeposit)) 
+# remove high corelated variables
+
+library(caret)
+
+hc <- findCorrelation(x = corr_stats,cutoff = .90,names = T)
+
+dataset1 <- dataset1 %>% 
+  select(-hc) %>% 
+  bind_cols(dataset %>% select(HasFixedDeposit)) %>%
+  mutate(Churn = ifelse(HasFixedDeposit == 1 & Churn == "Yes","No",Churn))
+
+splits <- initial_split(data = dataset1,strata = 'Churn',prop = .8)
+train <- training(splits)
+test <- testing(splits)
+
+train %>% ExpCTable(Target = "Churn",margin = 2) 
+
+base_rec <- 
+  recipe(Churn ~ .,
+         data=train %>% mutate(
+           Churn = as.factor(Churn),
+           HasFixedDeposit = as.factor(HasFixedDeposit),
+           ProductsSub = as.factor(ProductsSub),
+         ) %>% 
+  step_dummy(all_nominal_predictors())
 
 
-## Base Model
-
-```{r}
-tidymodels_prefer()
-set.seed(1)
-churn_sc_data <- initial_split(dataset1,prop = .8,strata = "Churn")
-
-train <- training(churn_sc_data)
-test <- testing(churn_sc_data)
-
-set.seed(1)
-bird_folds <- vfold_cv(train, strata = Churn)
-
-glm_spec <- logistic_reg()
-
-base_mod <- recipe(Churn~.,data = train) %>% 
-  update_role(client_id,new_role = "sample ID") %>% 
-  step_dummy(all_nominal_predictors()) %>% 
-  step_center(na_rm = T)
-  
-  
-wf_basic <- workflow(base_mod,glm_spec) 
-doParallel::registerDoParallel()
-ctrl_preds <- control_resamples(save_pred = TRUE)
-rs_basic   <- fit_resamples(wf_basic, bird_folds, control = ctrl_preds)
-
-collect_metrics(rs_basic)
-```
-
-## Feature engineering
-
-```{r}
-lm <- logistic_reg() %>% 
-  fit(Churn~.,data=dataset %>% mutate(Churn=as.factor(Churn)))
-
+base_rec %>% prep() %>% bake(new_data = train)
 ```
 
