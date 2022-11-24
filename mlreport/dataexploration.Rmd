@@ -1,0 +1,359 @@
+
+
+# Dataset Overview
+
+```{r dataimport and library ,message=F,warning=F,error=F}
+# libraries
+library(tidyverse);library(janitor);library(flextable)
+library(dlookr);library(feather);library(DataExplorer)
+# dataset
+datafile <- read_feather("data/input/customers.feather") %>% 
+  select(-New_Status,-AMount_Mobilised,-ProductID)
+```
+## Data Quality
+
+### Dataset Dimensions.
+```{r}
+plot_intro(datafile,ggtheme = theme_bw(),geom_label_args = list(size=4))
+```
+
+
+```{r}
+introduce(datafile) %>% 
+  t() %>% 
+  as_tibble(rownames = "Variable") %>% 
+  rename('Values'="V1") %>% 
+  filter(Variable != "memory_usage")
+```
+
+```{r dimensions}
+df_dim = dim(datafile)
+```
+
+The dataset under study had `r df_dim[1]` records and `r df_dim[2]` variables inclusive of target variable.
+
+### Variable Explanations.
+
+```{r }
+tibble(
+  ClientID = "Unique Client Identifier",
+  CreatedOn = "Date when the Account Was created",
+  No_ofProducts = "Number of bank products the client is subscribed to",
+  Tenure = "The length of time a client has stayed with the institution since onboarding in days",
+  GenderID = "Clients Gender",
+  FirstTrxDate = "The first time the client made a transaction after onboarding",
+  LastTrxDate = "The last time the client made a transaction after onboarding",
+  TrxTenure = "Length of time in days between the first and the last transaction",
+  Lag_Debit = "Difference between the current withdrawal and the preceeding withdrawal",
+  Lag_Credit = "Difference between the current deposit and the preceeding deposit",
+  No_Trx = "Number of transactions the client had done with the bank",
+  WeekendTrx = "Number of transactions done on weekends",
+  EndMonthTrx = "Number of transactions done at the end of the month",
+  MidMonthTrx = "Number of transactions done at the mod of the month",
+  TransactedProducts = "Number of products the client has actualy transacted after subscription",
+  Transactions_per_week = "Number of transactions a client made on a weeekly basis",
+  Transactions_per_month = "Number of transactions a client made on a monthly basis",
+  Transactions_per_year = "Number of transactions a client made on a yearly basis",
+  Transactions_per_day = "Number of transactions a client made on a daily basis",
+  DepositTrx = "Number of deposit transactions",
+  DepositTrx_per_day = "Number of deposit transactions made on a daily basis",
+  DepositTrx_per_week = "Number of deposit transactions made on a weekly basis",
+  DepositTrx_per_month = "Number of deposit transactions made on a monthly basis",
+  DepositTrx_per_year = "Number of deposit transactions made on a yearly basis",
+  Total_Deposits = "Sum of deposit amount made",
+  Total_Deposits_per_day = "Sum of deposit amount saved on a daily basis",
+  Total_Deposits_per_week = "Sum of deposit amount saved on a weekly basis",
+  Total_Deposits_per_month = "Sum of deposit amount saved on a monthly basis",
+  Total_Deposits_per_year = "Sum of deposit amount saved on a yearly basis"
+) %>% 
+  t() %>% 
+  as_tibble(rownames = "Variable") %>% rename("Explanation"="V1")
+```
+
+
+### Quality
+
+```{r}
+dlookr::diagnose(datafile) %>%
+  as.data.frame() %>% arrange(desc(missing_count)) %>% 
+  mutate_at(.vars=names(select(.,-variables,-types)),.funs = function(x)round(x,2))
+```
+ __Observations and Inferences__
+ 
+From the above ,it was noticed that a number of variables had missing values.The missing values occurrence where however systematic showing an indication that the client had never used the service/product before.These will later require imputation.
+
+
+
+# Exploratory Data Analysis.
+
+The main interest under exploratory analysis is to understand the underlying distrubutions on every variable and their interactions.
+## Univariate Analysis.
+### Target Variable
+
+```{r}
+datafile %>% tabyl(ChurnStatus) %>% adorn_totals("row") %>% as_tibble() %>% 
+  mutate(percent = round(percent,2))
+```
+
+```{r}
+plotcol = "purple"
+plots_theme <- theme(text = element_text(size=12),
+                     plot.title = element_text(size = 12,hjust = .5,face = "bold"))
+datafile %>% tabyl(ChurnStatus) %>% 
+  ggplot(aes(ChurnStatus,percent)) +
+  geom_col(aes(fill = factor(c("green","red"),labels = c("Churn","Not Churn"))))+
+  plots_theme+theme(legend.position = 'none')+
+  labs(title = "Churn Status")
+```
+__Observations and inferences__
+
+As we can observe from above,the institution had a 35% churn rate.
+
+### Explanatory Variables
+#### Categorical Variables
+
+```{r}
+discretevars = datafile %>% select(-ChurnStatus) %>% 
+  summarise_all(.funs = function(x)length(unique(x))) %>% 
+  t() %>% 
+  as_tibble(rownames = "Variable") %>% 
+  filter(V1<=11) %>% pull(Variable)
+
+datafile  %>% select(discretevars) %>% 
+  mutate_all(as.factor) %>%
+rowid_to_column() %>% 
+  reshape2::melt(id.vars="rowid") %>% 
+ group_by(variable,value) %>% 
+  tally() %>% 
+  ggplot(aes(value,n))+
+  geom_col(fill=plotcol)+
+  facet_wrap(.~variable,scales = 'free',nrow = 3)+
+  plots_theme
+```
+```{r}
+# datafile  %>% 
+#   select(ChurnStatus,discretevars) %>% 
+#   mutate_all(as.factor) %>%
+#   rowid_to_column() %>% 
+#   reshape2::melt(id.vars=c("rowid","ChurnStatus")) %>% 
+#   group_by(ChurnStatus,variable,value) %>% tally() %>% 
+#   reshape2::dcast(variable+value~ChurnStatus,value.var = 'n',
+#                   fun.aggregate = sum,na.rm = T) %>% 
+#   split(.$variable) %>% 
+#   map_df(~adorn_totals(.,'row')) 
+```
+
+__Observations and inference__
+
+1. Majority of customers have subscribed for 2 products.
+2. Most customers spear to be males interns of gender
+3. Of the registered customers,majority have transacted in more than 2 products.
+4. Majority of the customers have no fixed deposit with the bank.
+5. Most clients who have transacted dint have  a running loan at the time pf the analysis
+6. A bigger percentage of customers have never taken loans with the bank.
+
+#### Numerical Variables
+
+```{r}
+numvars <- datafile %>%
+  select(-discretevars,-CreatedOn,-ClientID,-contains('Date'))
+
+numvars %>% select(-contains(c('loan','HasFixedDeposit','Total_Withdrawals',
+                               'Max_Withdrawals',
+            'Av_Withdrawals','days_since_last_trx','LastDepositBalance',
+            'WeekdayTrx','EndMonthTrxs','Total_Deposits_per_month',
+            'Total_Deposits_per_year','Transactions_per_month',
+            'Transactions_per_year','TransactedProducts'))) %>% 
+  reshape2::melt(id.vars = "ChurnStatus") %>% 
+  group_by(ChurnStatus,variable) %>% 
+  summarise(
+    sum = round(sum(value,na.rm = T),2),
+    mean = round(mean(value,na.rm = T),2),
+    variance = round(var(value,na.rm = T),2),
+    sd = round(sd(value,na.rm = T),2),
+    min = round(min(value,na.rm = T),2),
+    max = round(max(value,na.rm = T),2),
+  ) %>% 
+  arrange(variable) %>% 
+  select(variable,everything()) %>% 
+  kableExtra::kable() %>% kableExtra::kable_styling()
+  # reshape2::melt(id.vars = c('ChurnStatus','variable')) %>% 
+  # clean_names("upper_camel") %>% 
+  # reshape2::dcast(Variable+Variable_2~ChurnStatus,value.var = 'Value',fun.aggregate = sum) %>% 
+  # view()
+```
+
+##### Deposits transactions count Related
+
+```{r}
+datafile %>%
+  select(contains('deposittrx')) %>% 
+  rowid_to_column() %>% 
+  reshape2::melt('rowid') %>% 
+  ggplot(aes(log(value+1)))+
+  geom_histogram(fill=plotcol)+facet_wrap(.~variable,scales = 'free')+
+  plots_theme
+```
+
+
+##### Deposit transaction amount Related 
+
+```{r}
+numvars %>% 
+  select(contains('Total_Deposits'),
+         Max_Deposits,Av_Deposits,Var_Deposits,sd_Deposits) %>% 
+  rowid_to_column() %>% 
+  reshape2::melt('rowid') %>% 
+  ggplot(aes(log(value+1)))+
+  geom_histogram(fill=plotcol)+
+  facet_wrap(.~variable,scales = 'free',ncol = 3,nrow=4)
+
+# datafile
+```
+
+##### Transaction Count Related
+
+###### Descriptive Statistics
+
+```{r}
+numvars %>% 
+  select(No_Trx,WeekendTrx,WeekdayTrx,EndMonthTrxs,MidMonthTrxs,
+         contains('Transactions_per')) %>% 
+  describe()
+```
+
+
+###### Visualization
+
+```{r}
+numvars %>% select(No_Trx,WeekendTrx,WeekdayTrx,EndMonthTrxs,MidMonthTrxs,contains('Transactions_per')) %>% 
+    rowid_to_column() %>% 
+  reshape2::melt('rowid') %>% 
+  ggplot(aes(log(value+1)))+
+  geom_histogram(fill=plotcol)+facet_wrap(.~variable,scales = 'free')
+```
+__Observations and Inferences__
+
+- Number of transactions appear to be right skewed at Mean of 22.41 and sd = 41, transactions.Most clients have done 1-3 transactions only.
+
+- Yearly transactions were observed to be evenly distributed across the year.
+
+- Most customers make at most 3 transactions per month and less than 2 per week.
+
+##### Withdrawals Related
+
+###### Descriptive Statistics table
+
+```{r}
+numvars %>% select(Total_Withdrawals,Max_Withdrawals,Av_Withdrawals,Var_Withdrawals,sd_Withdrawals) %>% describe() %>% 
+  mutate_at(.vars = names(select(.,-variable)),.funs = function(x)round(x,2))
+```
+
+###### Visualization
+
+```{r}
+numvars %>% select(Total_Withdrawals,Max_Withdrawals,Av_Withdrawals,Var_Withdrawals,sd_Withdrawals) %>% 
+    rowid_to_column() %>% 
+  reshape2::melt('rowid') %>% 
+  ggplot(aes(log(value+1)))+
+  geom_histogram(fill=plotcol)+facet_wrap(.~variable,scales = 'free')
+```
+## Bivariate Analaysis
+### Target Variable Vs Categorical Variables
+
+#### Descriptive Statistics
+
+```{r}
+target_cat_sum <- datafile %>% 
+  select(discretevars,ChurnStatus) %>% 
+  rowid_to_column() %>%
+  reshape2::melt(id.vars=c('rowid',"ChurnStatus")) %>% 
+  group_by(ChurnStatus,variable,value) %>% 
+  tally() %>% 
+  reshape2::dcast(variable+value~ChurnStatus,value.var = "n",
+                  fun.aggregate = sum,na.rm=T) %>% 
+  split(.$variable) %>% 
+  map_df(~adorn_totals(.,c('row','col')) %>% 
+           mutate(ChurnRate = paste(round(Churn/Total * 100,2) ,"%"))) %>%
+  as_tibble() 
+target_cat_sum
+```
+
+
+```{r}
+
+plots <- target_cat_sum %>% 
+  mutate(ChurnRate = parse_number(ChurnRate)) %>% 
+  split(.$variable) %>% 
+  map(~ggplot(.,aes(variable,ChurnRate,fill = value))+
+  geom_col(position=position_dodge(width=1))+
+  # labs(title = paste("Churn Rate Vs ",variable))+
+  plots_theme)
+
+for (i in plots) {
+  print(i)
+}
+```
+
+### Target Variable Vs Numerical Variables
+
+##### Deposits transactions count Related
+
+###### Descriptive Statistics
+
+```{r}
+datafile %>% 
+  select(contains('deposittrx'),ChurnStatus) %>% 
+  group_by(ChurnStatus) %>% 
+  describe() %>% 
+  mutate_at(.vars = names(select(.,-variable,-ChurnStatus)),
+            .funs = function(x)round(x,2))
+```
+
+
+###### Visualization
+
+```{r}
+datafile %>% 
+  select(contains('deposittrx'),ChurnStatus) %>% 
+  rowid_to_column() %>% 
+  reshape2::melt(c('rowid','ChurnStatus')) %>% 
+  ggplot(aes(log(value+1),fill=ChurnStatus))+
+  geom_density()+facet_wrap(.~variable,scales = 'free')
+```
+### Correlation Analysis.
+
+In order to plot correlation,features that exhibited some distributions were selected.
+
+```{r}
+selected_num_vars <- datafile %>% 
+  select(Total_Deposits,Total_Deposits_per_day,Total_Deposits_per_week,
+         Total_Deposits_per_month,Total_Deposits_per_year,Av_Deposits,
+         No_Trx,WeekdayTrx,WeekdayTrx,EndMonthTrxs,MidMonthTrxs,
+         Transactions_per_day,Transactions_per_week,Transactions_per_month,
+         Transactions_per_year,Total_Withdrawals,Max_Withdrawals,Av_Withdrawals,
+         days_since_last_trx,LastDepositBalance)
+correlation <- cor(selected_num_vars)
+corrplot::corrplot(correlation,method = "pie",type = "lower",title = "Correlation Matrix",diag = T)
+```
+Observations and Inferences
+
+- Some variables are highly correlated with others. e.g. Total withdrawals vs Total deposits.
+- This correlation will be dealt with at feature engineering phase.
+
+__Variable Selection for the next stage of analysis__
+
+```{r}
+modelData <- 
+datafile %>% select(discretevars,ChurnStatus) %>% 
+  mutate(
+    GenderID = ifelse(is.na(GenderID),'Unknown',GenderID),
+    HasActiveLoans = ifelse(is.na(HasActiveLoans),"NO",HasActiveLoans)) %>% 
+  mutate_all(as.factor) %>% 
+  bind_cols(selected_num_vars)
+
+write_feather(modelData,"data/output/model_data.feather")
+```
+
+
+

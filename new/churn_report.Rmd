@@ -72,7 +72,7 @@ Clients who on boarded the digital platform of the bank and did not make any tra
 
 ```{r introduction cell,warning=F,message=F,error=F}
 library(tidymodels);library(feather);library(tidyverse);library(janitor);library(flextable);library(SmartEDA);library(corrplot);library(caret);library(tidymodels)
-dataset <-read.csv("~/churn/old/data/rawdata/churn.csv") %>% 
+dataset <-read.csv("E:/New folder/denis/old/data/rawdata/churn.csv") %>% 
   # mutate_at(c("Min_LoanTaken","Max_LoanTaken","FirstTrxDate","ProductID"),as.numeric) %>% 
   select(-c(X)) 
 
@@ -234,7 +234,9 @@ dataset1 = dataset %>%
     Churn = as.factor(Churn),
     HasFixedDeposit = as.factor(HasFixedDeposit),
     ProductsSub = as.factor(ifelse(ProductsSub > 2,"> 2",ProductsSub))) %>% 
-  select(-c(contains('deposit_vs_withdrawal')))
+  select(-c(DaysSinceTransaction,HasFixedDeposit,DepositTrxCount__12,
+            DepositTrxCount__6,minDeposit__12,ProductsSub,DepositTrxCount__3,
+            minDeposit__6,contains('deposit_vs_withdrawal')))
 
 
 ```
@@ -260,18 +262,15 @@ base_rec <-
   # step_center(na_rm = T,all_numeric_predictors()) %>%
   step_normalize(all_numeric_predictors()) %>% 
   step_dummy(all_nominal_predictors())%>%
-  step_pca(all_numeric_predictors(),num_comp = 10) %>%prep()
+  themis::step_smote(Churn) %>% 
+  step_mutate(Churn = as.factor(Churn))
+  # step_pca(all_numeric_predictors(),num_comp = 10) %>%
   
-train_sc <- base_rec %>%  bake(new_data = train) %>% 
-  mutate(Churn = as.factor(Churn))
-test_sc  <- base_rec %>%  bake(new_data = test)%>%
-  mutate(Churn = as.factor(Churn))
+  
+train_sc <- base_rec %>% prep() %>%   bake(new_data = NULL) 
+test_sc  <- base_rec %>%prep() %>%   bake(new_data = test)
 # train_sc
 
-# upsample minority class
-
-train_sc_ <- upSample(train_sc,y = train_sc$Churn) %>% select(-Class) %>% 
-  mutate(Churn = ifelse(Churn == 'No',1,0))
 ```
 
 ## Model Application
@@ -282,14 +281,43 @@ train_sc_ <- upSample(train_sc,y = train_sc$Churn) %>% select(-Class) %>%
 library(plyr)
 trControl <- trainControl(method = 'cv',number = 10)
 
-logit.CV <- train(x = train_sc_ %>% select(-Churn) , y= as.factor(train_sc_$Churn), 
-                  method = 'glm',trControl = trControl,family = 'binomial' )
+logit.CV <- train(x = train_sc %>% select(-Churn) , y= as.factor(train_sc$Churn), 
+                  method = 'glmnet',trControl = trControl,family = 'binomial' )
 
-nglm(train_sc)
+logit.CV
 
-plot(logit.CV)
+preds_logistic <- predict(logit.CV,newdata = test_sc,type = "prob")
+
+metrics = confusionMatrix(table(ifelse(preds_logistic[,1] > .5,"No","Yes"),test_sc$Churn))
+
+
+suppressMessages(library(pROC))
+
+test_roc = roc(test_sc$Churn ~ preds_logistic[,2], plot = TRUE, print.auc = TRUE)
 
 varImp(logit.CV)
+get_metrics <- function(obj,test_file,target,cutoff = 0.5) {
+  preds_prob <- predict(obj,newdata = test_file,type = "prob")
+  preds_class <- ifelse(preds_prob[,1] > cutoff,"No","Yes")
+  test_roc = roc(test_sc$Churn ~ preds_prob[,2],
+                 plot = F, print.auc = F)
 
+  metric= confusionMatrix(table(preds_class,test_file %>%
+                                          pluck(target)))$overal %>% 
+    as.data.frame() %>% t() %>% 
+    as_tibble() %>% select(Accuracy,Kappa) %>% 
+    mutate(AUC = as.numeric(test_roc$auc))
+    
+  
+  return(metric)
+}
+ 
+for (i in seq(0,1,0.5)) {
+  get_metrics(obj = logit.CV,test_file = test_sc,
+                   target = "Churn",cutoff = i)
+}
 ```
+
+## Decision trees
+
 

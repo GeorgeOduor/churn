@@ -1,0 +1,74 @@
+---
+title: "MACHINE LEARNING WORKFLOW"
+author: "George"
+date: "`r Sys.Date()`"
+output:
+  word_document: default
+  html_document: default
+---
+output: 
+  officedown::rdocx_document:
+    mapstyles:
+      Normal: ['First Paragraph']
+```{r setup, include=F}
+knitr::opts_chunk$set(echo = TRUE, fig.cap = TRUE)
+library(officedown)
+library(officer)
+
+fp <- fp_par(
+  text.align = "center", 
+  padding.bottom = 20, padding.top = 120, 
+  border.bottom = fp_border())
+
+ft <- fp_text(shading.color='#EFEFEF', bold = TRUE)
+```
+
+
+\newpage
+
+Table of content
+
+<!---BLOCK_TOC--->
+
+List of figures
+
+<!---BLOCK_TOC{seq_id: 'fig'}--->
+
+List of tables
+
+<!---BLOCK_TOC{seq_id: 'tab'}--->
+
+
+\newpage
+
+# Introduction.
+
+The goal of this analysis is to predict with precision the probability of customer churn and consequently help in customer retention and mitigation of the risks related to customer churn.
+
+## Business Value
+Below are some the business values that this analysis will create:
+
+1. Reduce churn rate by detecting early clients who are about to churn.
+
+2. Increase customer retention.
+
+3. Understand customer base better based on their activity.
+
+## Dataset
+
+The data set used in this project was sourced from client transaction data recorded since the inception of the financial institution.Based in this data set,informative feature sets were created which were subsequently used in the predictive model.
+
+The clients records included in this study were selected from those who were determined to have done at least one transaction within the banking platform.
+
+\newpage
+
+
+```{r introduction,child="dataexploration.Rmd",echo=F,include=T}
+
+```
+
+
+
+```{r modeling,echo=F,include=T}
+
+```

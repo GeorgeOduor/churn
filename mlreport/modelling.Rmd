@@ -1,0 +1,320 @@
+
+## Machine Learning Modelling Phase
+
+## Reading Data
+
+```{r}
+rm(list=ls())
+suppressPackageStartupMessages(library(tidymodels))
+suppressPackageStartupMessages(library(feather))
+library(tidyverse)
+datafile <- read_feather("data/output/model_data.feather")
+# datafile %>% writexl::write_xlsx("data/output/model_data.xlsx")
+# datafile %>% write.csv("data/output/model_data.csv")
+# datafile %>% select_if(is.factor) %>% tabyl(HasFixedDeposit)
+```
+
+### Train Test Split
+
+In order to maintain the ratio of churn status in the train and test splits ,a stratified split was performed with respect to the Churn Status.
+
+It is important to note that the splits were done in a ratio of 80:20 .
+
+```{r}
+datafile <- datafile %>% 
+  mutate(
+    ChurnStatus = factor(ifelse(ChurnStatus == 'Churn',1,0))
+  )
+split <- initial_split(data = datafile,strata = ChurnStatus)
+
+train_set <- training(split)
+test_set <- testing(split)
+cv <- vfold_cv(train_set)
+```
+### Data Preprocessing with recipes
+
+```{r}
+model_recipe <- 
+  recipe(ChurnStatus ~ .,data = train_set) %>% 
+  step_rm(c('HasFixedDeposit','Total_Withdrawals','Max_Withdrawals',
+            'Av_Withdrawals','days_since_last_trx','LastDepositBalance',
+            'WeekdayTrx','EndMonthTrxs','Total_Deposits_per_month',
+            'Total_Deposits_per_year','Transactions_per_month',
+            'Transactions_per_year','TransactedProducts')) %>%
+  # step_log(all_numeric(),-all_nominal(),-all_outcomes()) %>% 
+  step_scale(all_numeric(),-all_outcomes()) %>%
+  step_normalize(all_numeric(),-all_outcomes()) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_YeoJohnson(all_numeric(),-all_outcomes()) %>% 
+  # step_pca(all_numeric())  %>% 
+  themis::step_upsample(ChurnStatus,seed = 1,over_ratio = .5)
+
+train_sc <- prep(model_recipe) %>% bake(new_data = train_set)
+test_sc <- prep(model_recipe) %>% bake(new_data = test_set)
+
+```
+
+### Logistic Regression
+
+```{r}
+library(caret)
+library(glmnet)
+glm_mod = train(
+  form = ChurnStatus ~ .,
+  data = train_sc,
+  trControl = trainControl(method = "cv", number = 10),
+  method = "glmnet",
+  family = "binomial"
+)
+```
+#### Logistic Model Results
+
+```{r}
+predictions = predict(glm_mod,test_sc)
+predictions_proba = predict(glm_mod,test_sc,type = 'prob') %>% mutate_all(round,2)
+names(predictions_proba) = c('NotChurn','Churn')
+preds_prob = predictions_proba %>% 
+  bind_cols(test_set %>% select(ChurnStatus)) %>% 
+  bind_cols(tibble(ChurnPrediction = predictions))
+table(preds_prob$ChurnPrediction,preds_prob$ChurnStatus) %>% 
+  confusionMatrix()
+
+```
+
+#### Variable Selection
+
+```{r}
+logistic_metrics = metrics(preds_prob,truth = ChurnStatus,estimate = ChurnPrediction)
+
+logistic_metrics
+```
+
+
+## Decision Trees
+
+
+### Recipe
+
+```{r dtree}
+dtree_recipe <- 
+  recipe(ChurnStatus ~ .,data = train_set) %>% 
+  step_rm(c('HasFixedDeposit','Total_Withdrawals','Max_Withdrawals',
+            'Av_Withdrawals','days_since_last_trx','LastDepositBalance',
+            'WeekdayTrx','EndMonthTrxs','Total_Deposits_per_month',
+            'Total_Deposits_per_year','Transactions_per_month',
+            'Transactions_per_year','TransactedProducts')) %>%
+  # step_log(all_numeric(),-all_nominal(),-all_outcomes()) %>% 
+  step_scale(all_numeric(),-all_outcomes()) %>%
+  step_normalize(all_numeric(),-all_outcomes()) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_YeoJohnson(all_numeric(),-all_outcomes()) %>% 
+  step_pca(all_numeric())  %>%
+  themis::step_upsample(ChurnStatus,seed = 1,over_ratio = .5)
+
+
+dtree_train_sc =  dtree_recipe %>% prep() %>% bake(train_set)
+dtree_test_sc =  dtree_recipe %>% prep() %>% bake(test_set)
+library(caret)
+churn_tree = train(ChurnStatus ~ ., 
+                  data=dtree_train_sc, 
+                  method="rpart", 
+                  trControl = trainControl(method = "cv",number = 10))
+# plot the model
+suppressMessages(library(rattle))
+
+fancyRpartPlot(churn_tree$finalModel,main = "Decision tree Classsification Model",caption = "")
+# accuaracy
+```
+
+```{r}
+dtree_preds = predict(churn_tree, newdata = dtree_test_sc)
+
+accuaracy = round(mean(dtree_preds == dtree_test_sc$ChurnStatus),2)
+```
+
+
+```{r}
+confusionMatrix(factor(dtree_preds),factor(dtree_test_sc$ChurnStatus))
+cm = conf_mat(tibble(
+  truth = dtree_test_sc$ChurnStatus,
+  preds = dtree_preds
+),truth = truth,estimate = preds)
+autoplot(cm, type = "heatmap") +
+  scale_fill_gradient(low = "green", high = "red")
+```
+
+
+
+
+### Random Forest
+
+```{r rf}
+library(randomForest)
+library(mlbench)
+library(caret)
+library(e1071)
+
+mtry <- sqrt(ncol(train_set))
+control <- trainControl(method='repeatedcv', 
+                        number=10, 
+                        repeats=3)
+tunegrid <- expand.grid(.mtry=mtry)
+rf_default <- train(ChurnStatus~., 
+                      data=train_sc, 
+                      method='rf', 
+                      metric='Accuracy', 
+                      tuneGrid=tunegrid, 
+                      trControl=control)
+```
+
+```{r}
+rf_preds = predict(rf_default, newdata = test_sc)
+
+accuaracy = round(mean(rf_preds == test_sc$ChurnStatus),2)
+confusionMatrix(factor(rf_preds),factor(dtree_test_sc$ChurnStatus))
+```
+
+
+```{r}
+cm = conf_mat(tibble(
+  truth = dtree_test_sc$ChurnStatus,
+  preds = rf_preds
+),truth = truth,estimate = preds)
+autoplot(cm, type = "heatmap") +
+  scale_fill_gradient(low = "green", high = "red")
+
+```
+
+## SVM
+
+```{r support vector machine}
+mtry <- sqrt(ncol(train_set))
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+tunegrid <- expand.grid(.mtry=mtry)
+svm_default <- train(ChurnStatus~., 
+                      data=train_sc, 
+                      method='svmRadial', 
+                      metric='Accuracy', 
+                      # tuneGrid = expand.grid(C = seq(0, 2, length = 20)) ,
+                      trControl=control)
+```
+
+```{r}
+svm_preds = predict(svm_default, newdata = test_sc)
+
+accuaracy = round(mean(svm_preds == test_sc$ChurnStatus),2)
+confusionMatrix(factor(svm_preds),factor(dtree_test_sc$ChurnStatus))
+```
+
+
+```{r}
+
+cm = conf_mat(tibble(
+  truth = dtree_test_sc$ChurnStatus,
+  preds = svm_preds
+),truth = truth,estimate = preds)
+autoplot(cm, type = "heatmap") +
+  scale_fill_gradient(low = "green", high = "red")
+```
+
+## XGBoost
+
+```{r xgbst}
+library(xgboost)
+xgb_spec <- boost_tree(
+  trees = 1000, 
+  tree_depth = tune(), min_n = tune(), 
+  loss_reduction = tune(),                     ## first three: model complexity
+  sample_size = tune(), mtry = tune(),         ## randomness
+  learn_rate = tune(),                         ## step size
+) %>% 
+  set_engine("xgboost") %>% 
+  set_mode("classification")
+  
+
+xgb_grid <- grid_latin_hypercube(
+  tree_depth(),
+  min_n(),
+  loss_reduction(),
+  sample_size = sample_prop(),
+  finalize(mtry(), train_sc),
+  learn_rate(),
+  size = 30
+) 
+
+xgb_wf <- workflow() %>%
+  add_formula(ChurnStatus ~ .) %>%
+  add_model(xgb_spec)
+
+set.seed(123)
+ch_folds <- vfold_cv(train_sc, strata = ChurnStatus)
+
+doParallel::registerDoParallel()
+
+set.seed(234)
+xgb_res <- tune_grid(
+  xgb_wf,
+  resamples = ch_folds,
+  grid = xgb_grid,
+  control = control_grid(save_pred = TRUE)
+)
+
+collect_metrics(xgb_res)
+```
+
+
+```{r}
+xgb_res %>%
+  collect_metrics() %>%
+  filter(.metric == "roc_auc") %>%
+  select(mean, mtry:sample_size) %>%
+  pivot_longer(mtry:sample_size,
+               values_to = "value",
+               names_to = "parameter"
+  ) %>%
+  ggplot(aes(value, mean, color = parameter)) +
+  geom_point(alpha = 0.8, show.legend = FALSE) +
+  facet_wrap(~parameter, scales = "free_x") +
+  labs(x = NULL, y = "AUC")
+```
+
+```{r}
+show_best(xgb_res, "roc_auc")
+```
+
+```{r}
+best_auc <- select_best(xgb_res, "roc_auc")
+best_auc
+```
+```{r}
+final_xgb <- finalize_workflow(
+  xgb_wf,
+  best_auc
+)
+
+final_xgb
+```
+
+```{r}
+final_res <- last_fit(final_xgb, split)
+
+collect_metrics(final_res)
+```
+
+```{r}
+final_res %>%
+  collect_predictions() %>%
+  roc_curve(ChurnStatus, .pred_1) %>%
+  ggplot(aes(x = 1 - specificity, y = sensitivity)) +
+  geom_line(size = 1.5, color = "midnightblue") +
+  geom_abline(
+    lty = 2, alpha = 0.5,
+    color = "gray50",
+    size = 1.2
+  )
+
+  table(final_res %>% collect_predictions() %>% pull(ChurnStatus),
+        final_res %>% collect_predictions() %>% pull(.pred_class)) %>% 
+    caret::confusionMatrix()
+```
+

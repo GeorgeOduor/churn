@@ -1,0 +1,426 @@
+---
+title: "Churn Prediction"
+author: "Denis Orina"
+date: "11/15/2021"
+output:
+  pdf_document: default
+  word_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+# Introduction
+
+## Objectives
+
+- Predict Churn probabilities of customers and minimize.
+
+## Data Source
+
+1. Customer Listing
+
+2. Transactions table
+
+3. Loan Book
+
+# Data Analysis
+
+## Preliminary Analysis
+
+```{r packages , message=F,warning=F}
+# packages
+library(tidyverse)
+library(openxlsx)
+library(kableExtra)
+library(janitor)
+library(flextable)
+library(ggpubr)
+library(Amelia)
+library(mbanalytics)
+library(ggpubr)
+library(caret)
+library(DMwR)
+library(broom)
+library(tree)
+library(rpart)
+```
+
+```{r dataset}
+dataset = read.xlsx("data/rawdata/base_.xlsx")
+```
+
+## Overview
+
+```{r overview}
+DataExplorer::introduce(data = dataset) %>% 
+  t() %>% as_tibble(rownames = "Variable") %>% 
+  dplyr::filter(Variable != "memory_usage") %>% 
+  rename( 'Value' = 'V1' ) %>% 
+  flextable()
+# dlookr::eda_paged_report(.data = dataset,
+#                          target = "Churn",
+#                          output_dir = getwd(),
+#                          author="George")
+```
+
+```{r}
+DataExplorer::plot_intro(data = dataset) 
+```
+
+```{r}
+dataset %>% colnames() %>% enframe() %>% 
+  mutate(Explanation = "",Datatype="") %>% 
+  select(Column=value,Explanation,Datatype) %>% 
+  flextable() %>% 
+  theme_booktabs(bold_header = T) %>% 
+  set_caption("Dataset Variables")
+  
+```
+
+## Exploratory Data Analysis
+
+### Univariate Distribution
+#### Target Variable
+```{r params}
+color='purple'
+```
+
+```{r}
+dataset2 <- dataset %>% select(-ClientID)
+
+churn <- dataset2 %>% group_by(Churn) %>% tally(name = 'Count') %>% 
+  mutate("Propotions"= round(Count/sum(Count),2)* 100) %>% 
+  adorn_totals('row') 
+
+churn %>% flextable() %>% 
+  theme_booktabs(bold_header = T) %>% 
+  set_caption("Churn Rate")
+```
+
+```{r}
+plot1 = churn %>% dplyr::filter(Churn != "Total") %>%  
+  ggplot(aes(Churn,Propotions))+ geom_col(fill=color) + 
+  # geom_text(aes(Churn))+
+  labs(x='Churn Status',y="Propotions",title = 'Churn Rate Overview') +
+  theme_bw() + 
+  theme(plot.title  = element_text(hjust = .5,face = 'bold'))
+plot1
+```
+
+__Observations and inference__
+
+- The churn rate for this institution is very low as compared to the overall client count at 13% and 87% respectively.
+
+
+#### Explanatory variables.
+##### Categorical variables
+
+```{r}
+dataset2 = dataset2 %>%
+  mutate(Has_ActiveLoan = ifelse(is.na(Has_ActiveLoan),'Never taken aloan',
+                                 ifelse(Has_ActiveLoan == 1,"YES","NO")),
+         NumberOfProducts = ifelse(NumberOfProducts >= 3,">= 3 products",
+                                   paste(NumberOfProducts,"product")))
+
+catvars <-  dataset2 %>% select(Has_ActiveLoan,NumberOfProducts) 
+
+catvars_sum = catvars %>% 
+  mutate(id = 1) %>%  reshape2::melt(id.vars = 'id') %>% 
+  group_by(variable,value) %>% 
+  tally(name='Count') %>% 
+  mutate(Proportion = paste(round(Count/sum(Count)*100),"%")) %>% 
+  split(.$variable) %>% 
+  map(~adorn_totals(.,'row'))
+
+bind_rows(catvars_sum) %>% 
+  flextable()
+```
+```{r}
+plot2 = catvars %>% 
+  ggplot(aes(Has_ActiveLoan))+geom_bar(fill=color)+
+  labs(title = 'Loan Uptake Status')+
+  theme(plot.title = element_text(hjust = .5))+
+  theme(plot.title = element_text(hjust = .5),axis.text.x = element_text(angle = 45,vjust = .5))
+
+plot3 = catvars %>% 
+  ggplot(aes(NumberOfProducts))+geom_bar(fill=color)+
+  labs(title = 'Number Of Products')+
+  theme(plot.title = element_text(hjust = .5),axis.text.x = element_text(angle = 45,vjust = .5))
+
+plot3 = ggarrange(plot2,plot3,ncol = 2, nrow = 1)
+plot3
+
+```
+
+__Observations and inferences__
+
+- Majority of clients have 2 products as compared to the remaining < 50% with more than one product.
+
+- Majority of clients have existing running loans with the institution.
+
+##### Numerical Variables
+
+```{r}
+num_vars = dataset2 %>% select(-c(Churn,NumberOfProducts,LastTrxDate,Has_ActiveLoan))
+descriptives <- function(x) {
+  x = as.numeric(x)
+  m <- mean(x,na.rm = T)
+  s <- sd(x,na.rm = T)
+  v <- var(x,na.rm = T)
+  min <- min(x,na.rm = T)
+  max <- max(x,na.rm = T)
+  qt <-  quantile(x,na.rm = T) %>% as_tibble(rownames = 'ss' ) %>% mutate(index = 1) %>% reshape2::dcast(index~ss) %>% select(-index) %>% 
+    mutate_all(round,2)
+  return(
+    tibble(
+      mean = round(m,2),
+      variance = round(v,2),
+      sd = round(s,2),
+      max = round(max,2),
+      min = round(min,2),
+    ) %>% bind_cols(qt)
+  )
+}
+num_vars %>% colnames() %>% as_tibble() %>% bind_cols(
+  num_vars  %>% as.list() %>% 
+  map_df(~descriptives(.))
+) %>% flextable()
+```
+
+```{r}
+# densityplots <- DataExplorer::plot_density(data = num_vars) 
+
+# DataExplorer::create_report()
+visualize_num <- function(num_vars,varname,bins) {
+  out = ggarrange(num_vars %>% ggplot(aes_string(varname))+geom_histogram(fill=color,bins = bins) +
+  labs(title = glue("Distribution Histogram of \n {varname}")),
+num_vars %>% ggplot(aes_string(y=varname))+geom_boxplot(fill=color) +
+  labs(title = glue("Boxplot of \n {varname}")),ncol = 2,nrow = 1)
+  return(out)
+}
+plots = num_vars %>% 
+  select(-c(Max_LoanTaken,Min_LoanTaken)) %>% 
+  names() %>% 
+  map(~visualize_num(num_vars = num_vars,.,bins=30))
+
+
+```
+
+### Bivariate Analysis
+##### Descriptives
+```{r}
+churn_status = dataset2 %>% 
+  select(-c(NumberOfProducts,LastTrxDate,Has_ActiveLoan,Max_LoanTaken,Min_LoanTaken))
+
+# rbind(
+#   describe(churn) %>% mutate(ChurnStatus = 'churn'),
+#   describe(not_churn) %>% mutate(ChurnStatus = 'not_churn')
+# ) %>% select(ChurnStatus,everything()) %>% 
+#   select(-c(type,unique_count,na_count,unique_share,na_share)) %>% 
+#   view()
+
+
+  status <- bind_rows(
+  num_vars %>% select(contains(churn_status %>% names())) %>% 
+  colnames() %>% as_tibble() %>%  
+  bind_cols(
+  churn_status %>% 
+    dplyr::filter(Churn == 'Churn') %>% 
+    select(-Churn)  %>% 
+    as.list() %>% 
+  map_df(~descriptives(.))
+) %>% mutate(ChurnStatus = "Churn"),
+
+num_vars %>% select(contains(churn_status %>% names())) %>% 
+  colnames() %>% as_tibble() %>%  
+  bind_cols(
+  churn_status %>% 
+    dplyr::filter(Churn != 'Churn') %>% 
+    select(-Churn)  %>% 
+    as.list() %>% 
+  map_df(~descriptives(.))) %>% 
+  mutate(ChurnStatus = "Not_Churn")) %>% 
+  select(Variable=value,ChurnStatus,everything()) %>%
+  reshape2::melt(id.vars = c('ChurnStatus','Variable')) %>%
+  reshape2::dcast(Variable+ChurnStatus~variable) %>% 
+  mutate_all(.funs = function(x)ifelse(is.na(x),0,x)) %>% 
+  flextable()
+
+  status
+
+
+
+```
+##### Categorical Vs Target
+
+```{r}
+p1 = dataset2 %>% 
+  select(NumberOfProducts,Has_ActiveLoan,Churn) %>% 
+  ggplot(aes(x=NumberOfProducts,fill=Churn))+geom_bar(position = "fill") +
+  theme(plot.title = element_text(hjust = .5),axis.text.x = element_text(angle = 45,vjust = .5)) +
+  labs(title = 'NumberOfProducts Vs Churn')
+p2 = dataset2 %>% 
+  select(NumberOfProducts,Has_ActiveLoan,Churn) %>% 
+  ggplot(aes(x=Has_ActiveLoan,fill=Churn))+geom_bar(position = "fill") +
+  labs(title = 'Loan Uptake Vs Churn') + 
+  theme(plot.title = element_text(hjust = .5),axis.text.x = element_text(angle = 45,vjust = .5))
+
+p3 = ggarrange(p1,p2,ncol = 2,nrow = 1)
+```
+
+
+##### Numerical Vs Target
+
+```{r}
+viz2 <- function(variable) {
+  plot = ggarrange(
+  dataset2 %>% 
+  ggplot(aes_string(x=variable,fill='Churn'))+geom_histogram(position = 'dodge') + #facet_grid(.~Churn)+
+  theme(plot.title = element_text(hjust = .5),axis.text.x = element_text(angle = 45,vjust = .5)) +
+  labs(title = glue('{variable} Vs Churn')),
+
+dataset2 %>% 
+  ggplot(aes_string(x=variable,fill='Churn'))+geom_boxplot() +#coord_flip()+
+  theme(plot.title = element_text(hjust = .5),axis.text.x = element_text(angle = 45,vjust = .5)) +
+  labs(title = glue('{variable} Vs Churn')),ncol = 2,nrow = 1,common.legend = T
+)
+  return(plot)
+}
+
+suppressMessages(
+  num_vars %>%
+    select(-c(Max_LoanTaken,Min_LoanTaken)) %>%  
+    names() %>% 
+  map(~ viz2(.)))
+
+```
+
+##### Variable Correlation
+
+```{r correlation}
+library(corrplot)
+
+corrplot(cor(num_vars %>% select_if(is.numeric) %>% 
+               select(-c(Trx_Status)) %>% 
+                     mutate_all(.funs = function(x)ifelse(is.na(x),0,x))),
+               # lower = "number", 
+               type="lower",tl.cex = .8,method = 'pie',diag = T)
+```
+
+
+
+
+## Data Pre processing
+
+### Drop Unncecessary Columns
+
+```{r}
+df <- dataset %>% select(-c(ClientID,contains('date'),Trx_Status))
+```
+
+### Dealing with Missing Values
+
+```{r}
+missmap(df)
+```
+
+There are so many ways to deal with missing values.For instance in this dataset most variables are missing because of no transaction history.In this case they will be imputed with value zero.
+
+From the above chart,its evident that Loan Related variables are more likely to have a missing value than any other transaction related variable.Such cases would only imply that the said clients do not have any loan transaction history with the financial institution.
+
+```{r missing value imputation}
+df <- df %>% mutate_all(.funs = function(x)ifelse(is.na(x),0,x)) 
+```
+
+### Dealing with Skewness and abnormality
+
+As observed from above,the variables were heavily skewed,to correct this ,min max scaling was used.
+
+```{r}
+Churn <- df %>% select(Churn)
+exp_df <- df %>% select(-c(Churn,First_Loan_Last_Loan_diff))
+exp_df_sc <- exp_df %>% 
+  mutate_at(c("Max_LoanTaken","Min_LoanTaken"),as.numeric) %>% 
+  mutate_all(.funs = function(x)(x - min(x,na.rm = T))/(max(x,na.rm = T) - min(x,na.rm = T)))
+```
+
+### Train test Split
+
+```{r}
+exp_df_sc <- bind_cols(exp_df_sc,Churn)
+set.seed(3456)
+trainIndex <- createDataPartition(exp_df_sc$Churn, p = .8, 
+                                  list = FALSE, 
+                                  times = 1)
+train <- exp_df_sc[ trainIndex,] %>% mutate(Churn = factor(Churn))
+test  <- exp_df_sc[-trainIndex,] %>% mutate(Churn = factor(Churn))
+
+```
+
+### Upsampling Minority Class
+
+```{r upsampling}
+set.seed(111)
+trainsmote <- SMOTE(Churn ~ . ,data = train)
+```
+
+## Modeling
+
+### Logistic regression
+
+```{r}
+churn_glm_mod = train(
+  form = Churn ~ .,
+  data = trainsmote,
+  trControl = trainControl(method = "cv", number = 5),
+  method = "glm",
+  family = "binomial"
+)
+# model results ======
+accuracy <- churn_glm_mod$results
+churn_glm_mod$finalModel$coefficients %>% tidy() %>% rename("coeff"="x")
+
+calc_acc = function(actual, predicted) {
+  mean(actual == predicted)
+}
+
+preds = predict(churn_glm_mod,newdata = test)
+
+accuracy <- calc_acc(actual = test$Churn,predicted = preds)
+
+cm_logistic_reg <- caret::confusionMatrix(preds,test$Churn)
+
+cm_logistic_reg
+```
+### Decision Trees
+
+#### Model definition
+
+```{r}
+dtree = tree(Churn ~ ., data = trainsmote)
+summary(dtree)
+```
+#### Model evaluation
+
+```{r}
+preds_dtree = predict(dtree, test, type = "class")
+accuracydtree <- calc_acc(actual = test$Churn,predicted = preds_dtree)* 100
+cm_dtree <- confusionMatrix(preds_dtree,test$Churn)
+```
+### Random Forest
+
+```{r}
+rf = rpart(Churn ~ ., data = trainsmote)
+preds_rf = predict(rf, test, type = "class")
+calc_acc(actual = test$Churn,predicted = preds_rf)
+cm_rf <- confusionMatrix(preds_rf,test$Churn)
+cm_rf
+
+```
+
+
+
