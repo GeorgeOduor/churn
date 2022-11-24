@@ -71,7 +71,7 @@ Clients who on boarded the digital platform of the bank and did not make any tra
 ## Project setup and data loading
 
 ```{r introduction cell,warning=F,message=F,error=F}
-library(tidymodels);library(feather);library(tidyverse);library(janitor);library(flextable);library(SmartEDA);library(corrplot)
+library(tidymodels);library(feather);library(tidyverse);library(janitor);library(flextable);library(SmartEDA);library(corrplot);library(caret);library(tidymodels)
 dataset <-read.csv("~/churn/old/data/rawdata/churn.csv") %>% 
   # mutate_at(c("Min_LoanTaken","Max_LoanTaken","FirstTrxDate","ProductID"),as.numeric) %>% 
   select(-c(X)) 
@@ -221,37 +221,75 @@ corrplot(corr_stats, type = "lower",tl.col = "black", tl.srt = 45)
 
 ```
 
-## Pre variable_selection selection
+
+## Data Peprocessing
+
+### Generic feature generation
 
 ```{r}
-dataset1 = dataset %>% select(-c(client_id,minWithdrawal,age,HasFixedDeposit)) 
-# remove high corelated variables
 
-library(caret)
+dataset1 = dataset %>%
+  select(-c(client_id,minWithdrawal,age)) %>% 
+  mutate(
+    Churn = as.factor(Churn),
+    HasFixedDeposit = as.factor(HasFixedDeposit),
+    ProductsSub = as.factor(ifelse(ProductsSub > 2,"> 2",ProductsSub))) %>% 
+  select(-c(contains('deposit_vs_withdrawal')))
 
-hc <- findCorrelation(x = corr_stats,cutoff = .90,names = T)
 
-dataset1 <- dataset1 %>% 
-  select(-hc) %>% 
-  bind_cols(dataset %>% select(HasFixedDeposit)) %>%
-  mutate(Churn = ifelse(HasFixedDeposit == 1 & Churn == "Yes","No",Churn))
+```
 
+
+### Train Test Split
+
+```{r}
 splits <- initial_split(data = dataset1,strata = 'Churn',prop = .8)
 train <- training(splits)
 test <- testing(splits)
 
-train %>% ExpCTable(Target = "Churn",margin = 2) 
+```
+
+### Data Preprocessing with tidy models
+
+```{r}
 
 base_rec <- 
-  recipe(Churn ~ .,
-         data=train %>% mutate(
-           Churn = as.factor(Churn),
-           HasFixedDeposit = as.factor(HasFixedDeposit),
-           ProductsSub = as.factor(ProductsSub),
-         ) %>% 
-  step_dummy(all_nominal_predictors())
+  recipe(Churn ~ .,data=train) %>% 
+  step_corr(all_numeric_predictors(),threshold = .7)  %>% 
+  # step_log(all_numeric_predictors()) %>%
+  # step_center(na_rm = T,all_numeric_predictors()) %>%
+  step_normalize(all_numeric_predictors()) %>% 
+  step_dummy(all_nominal_predictors())%>%
+  step_pca(all_numeric_predictors(),num_comp = 10) %>%prep()
+  
+train_sc <- base_rec %>%  bake(new_data = train) %>% 
+  mutate(Churn = as.factor(Churn))
+test_sc  <- base_rec %>%  bake(new_data = test)%>%
+  mutate(Churn = as.factor(Churn))
+# train_sc
 
+# upsample minority class
 
-base_rec %>% prep() %>% bake(new_data = train)
+train_sc_ <- upSample(train_sc,y = train_sc$Churn) %>% select(-Class) %>% 
+  mutate(Churn = ifelse(Churn == 'No',1,0))
+```
+
+## Model Application
+
+### Logistic Regression
+
+```{r}
+library(plyr)
+trControl <- trainControl(method = 'cv',number = 10)
+
+logit.CV <- train(x = train_sc_ %>% select(-Churn) , y= as.factor(train_sc_$Churn), 
+                  method = 'glm',trControl = trControl,family = 'binomial' )
+
+nglm(train_sc)
+
+plot(logit.CV)
+
+varImp(logit.CV)
+
 ```
 
